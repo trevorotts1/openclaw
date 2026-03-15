@@ -6,6 +6,7 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
 import { TelnyxProvider } from "./providers/telnyx.js";
+import { FishAudioTTSProvider } from "./providers/tts-fish-audio.js";
 import { TwilioProvider } from "./providers/twilio.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
@@ -235,6 +236,55 @@ export async function createVoiceCallRuntime(params: {
       }
     }
 
+    // Wire Fish Audio TTS bridge for Telnyx provider
+    if (provider.name === "telnyx") {
+      const pluginTtsProvider = config.tts?.provider;
+      const pluginFishConfig = (config.tts as Record<string, unknown>)?.["fish-audio"] as
+        | Record<string, unknown>
+        | undefined;
+
+      if (pluginTtsProvider === "fish-audio") {
+        const effectiveFishConfig = pluginFishConfig ?? {};
+        try {
+          const fishTts = new FishAudioTTSProvider({
+            apiKey: effectiveFishConfig.apiKey as string | undefined,
+            voiceId: effectiveFishConfig.voiceId as string | undefined,
+            model: effectiveFishConfig.model as string | undefined,
+            latency: effectiveFishConfig.latency as "normal" | "balanced" | "low" | undefined,
+            temperature: effectiveFishConfig.temperature as number | undefined,
+            topP: effectiveFishConfig.topP as number | undefined,
+            normalize: effectiveFishConfig.normalize as boolean | undefined,
+            chunkLength: effectiveFishConfig.chunkLength as number | undefined,
+            speed: effectiveFishConfig.speed as number | undefined,
+          });
+
+          const audioBaseUrl = publicUrl ?? webhookUrl;
+          let audioCounter = 0;
+
+          (provider as TelnyxProvider).setFishAudioBridge({
+            generateAndServe: async (text: string, callId: string) => {
+              const pcm24k = await fishTts.synthesize(text);
+              const audioId = `${callId}-${++audioCounter}`;
+              const wavBuffer = buildWavBuffer(pcm24k, 24000, 1, 16);
+              const localUrl = webhookServer.storeAudio(audioId, wavBuffer);
+              if (publicUrl) {
+                return localUrl.replace(webhookUrl, publicUrl);
+              }
+              return localUrl;
+            },
+          });
+
+          log.info("[voice-call] Fish Audio TTS bridge configured for Telnyx");
+        } catch (err) {
+          log.warn(
+            `[voice-call] Failed to initialize Fish Audio TTS: ${
+              err instanceof Error ? err.message : String(err)
+            }. Falling back to native Telnyx speak.`,
+          );
+        }
+      }
+    }
+
     await manager.initialize(provider, webhookUrl);
 
     const stop = async () => await lifecycle.stop();
@@ -261,4 +311,36 @@ export async function createVoiceCallRuntime(params: {
     await lifecycle.stop({ suppressErrors: true });
     throw err;
   }
+}
+
+/**
+ * Build a WAV file buffer from raw PCM data.
+ * Standard RIFF WAV header (44 bytes) + PCM data.
+ */
+function buildWavBuffer(
+  pcm: Buffer,
+  sampleRate: number,
+  channels: number,
+  bitsPerSample: number,
+): Buffer {
+  const dataSize = pcm.length;
+  const header = Buffer.alloc(44);
+  const byteRate = sampleRate * channels * (bitsPerSample / 8);
+  const blockAlign = channels * (bitsPerSample / 8);
+
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcm]);
 }

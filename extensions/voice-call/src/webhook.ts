@@ -329,11 +329,54 @@ export class VoiceCallWebhookServer {
   /**
    * Handle incoming HTTP request.
    */
+  /**
+   * In-memory audio store for Fish Audio TTS bridge.
+   */
+  private audioStore = new Map<string, { buffer: Buffer; createdAt: number }>();
+  private audioCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Store audio buffer and return its local URL.
+   */
+  storeAudio(id: string, buffer: Buffer): string {
+    this.audioStore.set(id, { buffer, createdAt: Date.now() });
+    if (!this.audioCleanupTimer) {
+      this.audioCleanupTimer = setInterval(() => {
+        const now = Date.now();
+        for (const [key, entry] of this.audioStore) {
+          if (now - entry.createdAt > 120_000) {
+            this.audioStore.delete(key);
+          }
+        }
+      }, 30_000);
+    }
+    const baseUrl = this.listeningUrl ?? `http://localhost:${this.config.serve.port}`;
+    return `${baseUrl}/voice/audio/${id}.wav`;
+  }
+
   private async handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
     webhookPath: string,
   ): Promise<void> {
+    // Serve Fish Audio TTS audio files
+    const audioMatch = req.url?.match(/^\/voice\/audio\/([a-zA-Z0-9_-]+)\.wav/);
+    if (audioMatch && req.method === "GET") {
+      const audioId = audioMatch[1];
+      const entry = this.audioStore.get(audioId);
+      if (entry) {
+        res.writeHead(200, {
+          "Content-Type": "audio/wav",
+          "Content-Length": entry.buffer.length.toString(),
+        });
+        res.end(entry.buffer);
+        return;
+      }
+      res.writeHead(404);
+      res.end("Audio not found");
+      return;
+    }
+
     const payload = await this.runWebhookPipeline(req, webhookPath);
     this.writeWebhookResponse(res, payload);
   }

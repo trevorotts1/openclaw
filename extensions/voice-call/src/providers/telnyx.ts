@@ -262,9 +262,49 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   /**
-   * Play TTS audio via Telnyx speak action.
+   * Fish Audio TTS bridge (set by runtime when fish-audio provider is configured).
+   */
+  private fishAudioBridge: {
+    generateAndServe: (text: string, callId: string) => Promise<string>;
+  } | null = null;
+
+  /**
+   * Set Fish Audio TTS bridge for this provider.
+   * When set, playTts will use Fish Audio + playback_start instead of native speak.
+   */
+  setFishAudioBridge(bridge: {
+    generateAndServe: (text: string, callId: string) => Promise<string>;
+  }): void {
+    this.fishAudioBridge = bridge;
+  }
+
+  /**
+   * Play TTS audio via Telnyx speak action, or Fish Audio + playback_start if configured.
    */
   async playTts(input: PlayTtsInput): Promise<void> {
+    // If Fish Audio bridge is available, use it
+    if (this.fishAudioBridge) {
+      try {
+        const audioUrl = await this.fishAudioBridge.generateAndServe(
+          input.text,
+          String(input.callId),
+        );
+        await this.apiRequest(`/calls/${input.providerCallId}/actions/playback_start`, {
+          command_id: crypto.randomUUID(),
+          audio_url: audioUrl,
+        });
+        return;
+      } catch (err) {
+        console.warn(
+          `[voice-call] Fish Audio TTS failed, falling back to native speak: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        // Fall through to native speak
+      }
+    }
+
+    // Native Telnyx speak (fallback)
     await this.apiRequest(`/calls/${input.providerCallId}/actions/speak`, {
       command_id: crypto.randomUUID(),
       payload: input.text,
