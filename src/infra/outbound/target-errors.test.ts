@@ -5,6 +5,8 @@ import {
   ambiguousTargetMessage,
   missingTargetError,
   missingTargetMessage,
+  phoneNumberTargetError,
+  phoneNumberTargetMessage,
   unknownTargetError,
   unknownTargetMessage,
 } from "./target-errors.js";
@@ -60,6 +62,21 @@ describe("target error helpers", () => {
       actual: unknownTargetMessage("Discord", "general", "  Use channel:123  "),
       expected: 'Unknown target "general" for Discord. Hint: Use channel:123',
     },
+    {
+      actual: phoneNumberTargetMessage("Telegram", "+15550001234"),
+      expected:
+        'Telegram cannot send to a phone number ("+15550001234"); a numeric chat_id is required. Resolve this contact\'s numeric chat_id first — a phone number is not a valid Telegram target.',
+    },
+    {
+      actual: phoneNumberTargetMessage("Telegram", "+15550001234", "Use <chatId>"),
+      expected:
+        'Telegram cannot send to a phone number ("+15550001234"); a numeric chat_id is required. Resolve this contact\'s numeric chat_id first — a phone number is not a valid Telegram target. Hint: Use <chatId>',
+    },
+    {
+      actual: phoneNumberTargetError("Telegram", "+15550001234").message,
+      expected:
+        'Telegram cannot send to a phone number ("+15550001234"); a numeric chat_id is required. Resolve this contact\'s numeric chat_id first — a phone number is not a valid Telegram target.',
+    },
   ])("formats target error helper output for %j", ({ actual, expected }) => {
     expect(actual).toBe(expected);
   });
@@ -68,5 +85,12 @@ describe("target error helpers", () => {
     expect(ambiguousTargetError("Discord", "general", "Use channel:123").message).toContain(
       "Hint: Use channel:123",
     );
+  });
+
+  it("distinguishes phone-number target errors from unknown-target errors", () => {
+    const message = phoneNumberTargetError("Telegram", "+15550001234").message;
+    expect(message).toContain("phone number");
+    expect(message).toContain("chat_id");
+    expect(message).not.toContain("Unknown target");
   });
 });

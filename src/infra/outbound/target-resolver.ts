@@ -11,7 +11,11 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
-import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
+import {
+  ambiguousTargetError,
+  phoneNumberTargetError,
+  unknownTargetError,
+} from "./target-errors.js";
 import { maybeResolveIdLikeTarget, type ResolvedIdLikeTarget } from "./target-id-resolution.js";
 import {
   buildTargetResolverSignature,
@@ -488,6 +492,19 @@ export async function resolveMessagingTarget(params: {
     return {
       ok: true,
       target: resolvedFallbackTarget,
+    };
+  }
+
+  // A phone-shaped target (E.164 like "+14155551234", or a long digit string) is
+  // never a valid Telegram chat_id — a Telegram chat_id is `/^-?\d+$/` and any
+  // valid numeric chat_id would have resolved earlier via the id-like path. So a
+  // phone number reaching here is the wrong *target type*: return an actionable
+  // error distinguishing it from a generic unknown target, otherwise callers get
+  // no signal and blindly retry the same phone number.
+  if (params.channel === "telegram" && /^\+?\d{6,}$/.test(query)) {
+    return {
+      ok: false,
+      error: phoneNumberTargetError(providerLabel, raw, hint),
     };
   }
 
