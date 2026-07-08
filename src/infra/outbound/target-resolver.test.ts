@@ -121,4 +121,88 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
+
+  it("returns an actionable phone-number error for a phone-shaped telegram target", async () => {
+    // Mirror the real telegram plugin: only bare numeric chat_ids are id-like,
+    // and there is no plugin resolveTarget, so a phone number falls through to
+    // the phone-number branch instead of the generic unknown-target error.
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: (raw: string) => /^-?\d+$/.test(raw.trim()),
+        },
+      },
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "+15550001234",
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected phone-number target to fail resolution");
+    }
+    expect(result.error.message).toContain("phone number");
+    expect(result.error.message).toContain("chat_id");
+    expect(result.error.message).not.toContain("Unknown target");
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
+  it("still resolves a bare numeric telegram chat_id without hitting the phone-number path", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: (raw: string) => /^-?\d+$/.test(raw.trim()),
+        },
+      },
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "123456789",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.to).toBe("123456789");
+      expect(result.target.source).toBe("normalized");
+    }
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
+  it("does not apply the phone-number error to non-telegram phone-shaped targets", async () => {
+    // The phone-number branch is telegram-gated; other channels still resolve
+    // phone-shaped inputs through their own plugin resolver exactly as before.
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.resolveTarget.mockResolvedValue({
+      to: "+15550009876",
+      kind: "user",
+      source: "normalized",
+    });
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "mattermost",
+      input: "+15550009876",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.to).toBe("+15550009876");
+    }
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
 });
